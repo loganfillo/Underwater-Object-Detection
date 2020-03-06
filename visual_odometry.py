@@ -19,12 +19,12 @@ state = np.zeros((3,))
 state_data = [[],[]]
 
 # Algorithm params
-feature_params = dict( maxCorners = 500,
-                       qualityLevel = 0.08,
-                       minDistance = 20,
-                       blockSize = 7)
-lk_params = dict( winSize  = (70,70),
-                  maxLevel = 4,
+feature_params = dict( maxCorners = 250,
+                       qualityLevel = 0.06,
+                       minDistance = 25,
+                       blockSize = 25)
+lk_params = dict( winSize  = (100,100),
+                  maxLevel = 2,
                   criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 500, 1))
 clahe = cv.createCLAHE(clipLimit=1.0, 
                        tileGridSize=(8,8))
@@ -127,6 +127,7 @@ def visual_odometry(curr_frame):
                     R_net2 = np.eye(3)
                     t_net2 = np.zeros((3,1))
                 
+                # Store values of state before updating it (to calculate reprojection of 3D points)
                 R_net_prev = R_net.copy()
                 t_net_prev = t_net.copy()
 
@@ -190,7 +191,7 @@ def visual_odometry(curr_frame):
 ##################################
 # Video
 ##################################
-video_name = 'gate.mp4'
+video_name = 'dice.mp4'
 cap = cv.VideoCapture('./videos/' + video_name)
 if (cap.isOpened()== False): 
   print("Error opening video stream or file")
@@ -207,18 +208,20 @@ cv.destroyAllWindows()
 
 
 # Plot state data showing (normalized) trajectory
-ax.set_aspect('equal','box')
 state_data_copy = state_data.copy()
 
 # Plot state data from only essential matrix pose recovery
 state_data = np.array(state_data_copy[0]).T
 ax.scatter(state_data[0], state_data[1], state_data[2], 'b')
 ax.plot(state_data[0], state_data[1], state_data[2],'b')
+ax.set_aspect('equal','box')
 
 # Plot state data from triangulation and solvePnpRansac
-state_data = np.array(state_data_copy[1]).T
-ax.scatter(state_data[0], state_data[1], state_data[2], 'r')
-ax.plot(state_data[0], state_data[1], state_data[2], 'r')
+# state_data = np.array(state_data_copy[1]).T
+# ax.scatter(state_data[0], state_data[1], state_data[2], 'r')
+# ax.plot(state_data[0], state_data[1], state_data[2], 'r')
+# ax.set_aspect('equal','box')
+
 
 plt.show()
 
