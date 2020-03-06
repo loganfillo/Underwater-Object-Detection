@@ -150,20 +150,20 @@ def visual_odometry(curr_frame):
                 points_hom[0] = points_hom[0]/points_hom[3]
                 points_hom[1] = points_hom[1]/points_hom[3]
                 points_hom[2] = points_hom[2]/points_hom[3]
-                points_3d = points_hom[:3]
+                points_3d = points_hom[:3].T
 
                 # Check reprojection error of 3D points onto keyframe
-                R_vec,_ = cv.Rodrigues(R_net_prev)
-                points_key_reproj,_ = cv.projectPoints(points_3d.T, R_vec, t_net_prev, K, np.zeros((4,)) )
+                R_vec_prev,_ = cv.Rodrigues(R_net_prev)
+                points_key_reproj,_ = cv.projectPoints(points_3d, R_vec_prev, t_net_prev, K, np.zeros((4,)) )
                 points_key_reproj = points_key_reproj.reshape((points_key_reproj.shape[0], 2))
                 print("Reprojection error of triangulated 3D points onto last keyframe: ", np.linalg.norm(points_key-points_key_reproj))
 
                 # Plot 3D points at every keyframe creation
-                # ax.scatter(points_3d[0], points_3d[1], points_3d[2])
+                # ax.scatter(points_3d.T[0], points_3d.T[1], points_3d.T[2])
                 # plt.pause(10)
 
                 # Solve for R, t between keyframe and curr frame using PNP
-                _,R_vec, t, inliers = cv.solvePnPRansac(points_3d.T, points_curr, K, np.zeros((4,)))
+                _,R_vec, t, inliers = cv.solvePnPRansac(points_3d, points_curr, K, np.zeros((4,)))
                 
                 # Update state data with pose estimate from sovlePnPRansac and triangulated 3D points
                 R,_ = cv.Rodrigues(R_vec)
