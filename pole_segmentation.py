@@ -1,9 +1,11 @@
 import cv2 as cv
 import numpy as np
 
+
 # Free parameters of the system 
 IMG_RESIZE_SCALE = 1/3
 NUM_CLUSTERS = 5
+
 
 def preprocess(src):
     # Apply CLAHE and Gaussian on each RGB channel then downsize
@@ -17,6 +19,7 @@ def preprocess(src):
     src = cv.resize(src, (int(src.shape[1]*IMG_RESIZE_SCALE), int(src.shape[0]*IMG_RESIZE_SCALE)), cv.INTER_CUBIC )
     return src
 
+
 def gradient(src):
     # Compute gradient using grayscale image
     scale = 1
@@ -28,6 +31,7 @@ def gradient(src):
     abs_grad_y = cv.convertScaleAbs(grad_y)
     grad = np.expand_dims(cv.addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0), axis=2)
     return grad
+
 
 def cluster(src):
 
@@ -55,12 +59,14 @@ def cluster(src):
 
     return color_mask,  labelled_image
 
+
 def morphological(src):
     # Dilation then erosion to smooth segmentation
     kernel = np.ones((3,3), np.uint8)
     dilated = cv.dilate(src, kernel, iterations=1)
     eroded = cv.erode(dilated, kernel, iterations=1)
     return eroded
+
 
 def convex_hulls(src, orig):
 
@@ -117,13 +123,14 @@ def convex_hulls(src, orig):
                     pass
                 cosAngle = np.abs(np.cos(angle*np.pi/180))
 
-                # Only add hull to pole hulls if it is reasonably a vertically oriented rectangle
+                # Only add hull to pole hulls if it is reasonably a vertically oriented rectangle (this will be a ML model)
                 if  (cosAngle < 1.2) and (cosAngle > 0.98) and (MA/ma < 0.25):
                     pole_hulls.append(hull)
 
         # Display all pole hulls on original image
         for j in range(len(pole_hulls)):
             cv.drawContours(orig,pole_hulls, j, (0,0,255), 1, 8)
+            
     return orig
 
 def segmentation(src):
@@ -134,7 +141,8 @@ def segmentation(src):
 ##################################
 # Video
 ##################################
-cap = cv.VideoCapture('./videos/gate.mp4')
+video_name = 'gate.mp4'
+cap = cv.VideoCapture('./videos/' + video_name )
 if (cap.isOpened()== False): 
   print("Error opening video stream or file")
 while(cap.isOpened()):
