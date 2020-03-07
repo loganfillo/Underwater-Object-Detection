@@ -2,6 +2,10 @@ import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+
+# ROS imports
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge, CvBridgeError
 import rospy
 
 
@@ -15,6 +19,10 @@ class UWVO:
         """
         Create a UWVO system using given parameters
         """
+        # ROS
+        self.image_pub = rospy.Publisher("/visual_odom",Image, queue_size=10000)
+        self.bridge = CvBridge()
+        self.image_sub = rospy.Subscriber("/uwsim/camera2",Image,self.callback)
 
         # Frame to frame tracking
         self.prev_frame = None 
@@ -52,6 +60,19 @@ class UWVO:
         self.lk_params = dict( winSize  = (lk_winsize,lk_winsize),
                                maxLevel = 2,
                                criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 500, 1))
+
+
+    def callback(self, msg):
+        """
+        ROS callback used to process images
+        """
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            # Process img message
+            cv_image = self.process(cv_image)
+            self.image_pub.publish(self.bridge.cv2_to_imgmsg(cv_image, "mono8"))
+        except CvBridgeError as e:
+            print(e)
 
 
     def preprocess(self, im):
@@ -112,8 +133,8 @@ class UWVO:
                 # Only keep the points in the images tracked succesfully from the first to the second image
                 # Store in seperate variable to preserve shapes of prev, curr, keyframe points i.e  (n, 1, 2) instead of (n,2)
                 points_prev = self.prev_points[status == 1]
-                points_key = self.keyframe_points[status == 1] 
                 points_curr = curr_points[status == 1]
+                points_key = self.keyframe_points[status == 1] 
 
                 # Update prev, curr, and keyframe points, reshaped
                 self.prev_points = points_prev.reshape((points_prev.shape[0], 1, 2))
@@ -209,30 +230,22 @@ def plot_state(state_data):
     plt.show()
 
 def main():
-
     # Create visual odometry object
-    uwvo = UWVO(feature_quality=0.04, lk_winsize=100, im_scale=3.0/4, min_points=20)
-
-    # Run the visual odometry process on the input video 
-    video_name = 'gate.mov'
-    cap = cv.VideoCapture('./videos/' + video_name)
-    if (cap.isOpened()== False): 
-        print("Error opening video stream or file")
-    while(cap.isOpened()):
-        ret, frame = cap.read()
-        if ret == True:
-            cv.imshow('Features', uwvo.process(frame))
-            if cv.waitKey(25) & 0xFF == ord('q'):
-                break
-        else: 
-            break
-    cap.release()
-    cv.destroyAllWindows()
+    uwvo = UWVO(feature_quality=0.1, lk_winsize=500, im_scale=1.0, min_points=10)
+    rospy.init_node('uwvo', anonymous=True)
+    try:
+        print("Spinning")
+        rospy.spin()
+    except KeyboardInterrupt:
+        print("Shutting down")
 
     # Plot the state
     plot_state(uwvo.state_data)
 
 # Run main
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    try:
+        main()
+    except rospy.ROSInterruptException:
+        pass
 

@@ -3,7 +3,7 @@ import numpy as np
 
 
 # Free parameters of the system 
-IMG_RESIZE_SCALE = 1/3
+IMG_RESIZE_SCALE = 1.0/3
 NUM_CLUSTERS = 5
 
 
@@ -87,7 +87,7 @@ def convex_hulls(src, orig):
             continue
 
         # First find contours in the image
-        contours, hierarchy = cv.findContours(bin, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+        img, contours, hierarchy = cv.findContours(bin, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
         hulls = []
 
         # Create a convex hull around each connected contour
@@ -141,7 +141,7 @@ def segmentation(src):
 ##################################
 # Video
 ##################################
-video_name = 'gate.mp4'
+video_name = 'gate.mov'
 cap = cv.VideoCapture('./videos/' + video_name )
 if (cap.isOpened()== False): 
   print("Error opening video stream or file")
