@@ -11,8 +11,7 @@ import rospy
 
 """
 UnderWater Visual Odometry System
-"""
-class UWVO:
+"""class UWVO
 
 
     def __init__(self, feature_quality=0.04, lk_winsize=100, im_scale=1.0, min_points=15):
@@ -58,8 +57,9 @@ class UWVO:
                                     minDistance = 25,
                                     blockSize = 25)
         self.lk_params = dict( winSize  = (lk_winsize,lk_winsize),
-                               maxLevel = 2,
-                               criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 500, 1))
+                               maxLevel = 3,
+                               criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.01),
+                               minEigThreshold= 0.001)
 
 
     def callback(self, msg):
@@ -105,12 +105,12 @@ class UWVO:
 
 
     def process(self, curr_frame):
-        '''
+        """
         Track features from previous frame to current frame, if a parallax exceding a threshold has been
         reached, determine change in pose between previous keyframe and current frame and update the state 
         accordingly. Then triangulate the tracked features in current frame and previous key to achieve 3D
         observations of tracked features. 
-        '''
+        """
 
         # Preprocess curr frame
         curr_frame = self.preprocess(curr_frame)
@@ -231,7 +231,7 @@ def plot_state(state_data):
 
 def main():
     # Create visual odometry object
-    uwvo = UWVO(feature_quality=0.1, lk_winsize=500, im_scale=1.0, min_points=10)
+    uwvo = UWVO(feature_quality=0.1, lk_winsize=21, im_scale=1.0, min_points=10)
     rospy.init_node('uwvo', anonymous=True)
     try:
         print("Spinning")

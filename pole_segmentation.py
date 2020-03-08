@@ -108,12 +108,13 @@ def convex_hulls(src, orig):
                 #This displays each good size hull and coprresponding fitted ellipse seperately on a blank image 
                 # blank = np.zeros((src.shape[0]*2, src.shape[1]*2,3), np.uint8)
                 # cv.polylines(blank, [con], True, (0,0,255))
-                # ellipse = cv.fitEllipse(con)
-                # cv.ellipse(blank, ellipse,(0,255,0), 1)
+                # # ellipse = cv.fitEllipse(con)
+                # # cv.ellipse(blank, ellipse,(0,255,0), 1)
+                # print(con)
                 # cv.imshow('Convex Hull', blank)
                 # cv.waitKey(0)
 
-                # Sometime fitEllipse doesn't work on a convex hull, we need dummy values
+                #Sometime fitEllipse doesn't work on a convex hull, we need dummy values
                 angle = 0
                 MA = 1
                 ma = 1
@@ -122,6 +123,7 @@ def convex_hulls(src, orig):
                 except:
                     pass
                 cosAngle = np.abs(np.cos(angle*np.pi/180))
+                print(MA/ma, cosAngle)
 
                 # Only add hull to pole hulls if it is reasonably a vertically oriented rectangle (this will be a ML model)
                 if  (cosAngle < 1.2) and (cosAngle > 0.98) and (MA/ma < 0.25):

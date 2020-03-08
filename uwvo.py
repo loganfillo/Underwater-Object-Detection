@@ -2,7 +2,7 @@ import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-import rospy
+import os
 
 
 """
@@ -11,7 +11,7 @@ UnderWater Visual Odometry System
 class UWVO:
 
 
-    def __init__(self, feature_quality=0.04, lk_winsize=100, im_scale=1.0, min_points=15):
+    def __init__(self, feature_quality=0.04, lk_winsize=100, im_scale=1.0, min_points=15, cam_focal=1.0):
         """
         Create a UWVO system using given parameters
         """
@@ -38,20 +38,20 @@ class UWVO:
                        tileGridSize=(8,8))
 
         # Create intrinsic camera matrix K
-        focal = 2.97 
+        focal = cam_focal
         self.K = np.zeros((3,3))
         self.K[0,0] = focal
         self.K[1,1] = focal
         self.K[2, 2] = 1
 
         # Algorithm params
-        self.feature_params = dict( maxCorners = 250,
+        self.feature_params = dict( maxCorners = 500,
                                     qualityLevel = feature_quality,
-                                    minDistance = 25,
-                                    blockSize = 25)
+                                    minDistance = 7,
+                                    blockSize = 7)
         self.lk_params = dict( winSize  = (lk_winsize,lk_winsize),
-                               maxLevel = 2,
-                               criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 500, 1))
+                               maxLevel = 3,
+                               criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.001))
 
 
     def preprocess(self, im):
@@ -83,7 +83,7 @@ class UWVO:
         return points
 
 
-    def process(self, curr_frame):
+    def process(self, curr_frame, scale):
         '''
         Track features from previous frame to current frame, if a parallax exceding a threshold has been
         reached, determine change in pose between previous keyframe and current frame and update the state 
@@ -118,7 +118,35 @@ class UWVO:
                 # Update prev, curr, and keyframe points, reshaped
                 self.prev_points = points_prev.reshape((points_prev.shape[0], 1, 2))
                 curr_points = points_curr.reshape((points_curr.shape[0], 1, 2))
-                self.keyframe_points = points_key.reshape((points_key.shape[0], 1, 2))   
+                self.keyframe_points = points_key.reshape((points_key.shape[0], 1, 2)) 
+
+                # Recover change in pose between last keyframe and curr points
+                # E,_ = cv.findEssentialMat(points_key, points_curr, self. K)
+                # _, R, t,_ = cv.recoverPose(E, points_key, points_curr, self.K)
+                E,_ = cv.findEssentialMat(points_prev, points_curr, self. K)
+                _, R, t,_ = cv.recoverPose(E, points_prev, points_curr, self.K)
+
+
+                if self.R_net is None and self.t_net is None:
+                    self.R_net = np.eye(3)
+                    self.t_net = np.zeros((3,1))
+                
+                # Store values of self.state before updating it (to calculate reprojection of 3D points)
+                R_net_prev = self.R_net.copy()
+                t_net_prev = self.t_net.copy()  
+
+                # Projection matrix from origin to last keyframe
+                P_key = np.matmul(self.K, np.hstack((self.R_net, self.t_net)))
+
+                # Update self.state using only pose estimation from essential matrix
+                self.t_net = self.t_net + scale*np.dot(self.R_net, t)
+                self.R_net = np.matmul(R, self.R_net)
+                self.state = self.t_net.flatten()
+                self.state_data.append(self.state.copy())
+
+                # Projection matrix from last keyframe to curr frame
+                P = np.matmul(self.K, np.hstack((self.R_net, self.t_net)))
+
 
                 # Calculate the mean distance between all corresponding points in each image 
                 # This is a rough estimation of how much motion has been captured by the frame sequence
@@ -129,30 +157,6 @@ class UWVO:
 
                     # Reset self.parallax
                     self.parallax = 0.0    
-
-                    # Recover change in pose between last keyframe and curr points
-                    E,_ = cv.findEssentialMat(points_key, points_curr, self. K)
-                    _, R, t,_ = cv.recoverPose(E, points_key, points_curr, self.K)
-
-                    if self.R_net is None and self.t_net is None:
-                        self.R_net = np.eye(3)
-                        self.t_net = np.zeros((3,1))
-                    
-                    # Store values of self.state before updating it (to calculate reprojection of 3D points)
-                    R_net_prev = self.R_net.copy()
-                    t_net_prev = self.t_net.copy()
-
-                    # Projection matrix from origin to last keyframe
-                    P_key = np.matmul(self.K, np.hstack((self.R_net, self.t_net)))
-
-                    # Update self.state using only pose estimation from essential matrix
-                    self.t_net = self.t_net + np.dot(self.R_net, t)
-                    self.R_net = np.matmul(R, self.R_net)
-                    self.state = self.t_net.flatten()
-                    self.state_data.append(self.state.copy())
-
-                    # Projection matrix from last keyframe to curr frame
-                    P = np.matmul(self.K, np.hstack((self.R_net, self.t_net)))
 
                     # Triangulate from keyframe points to curr points
                     points_hom = cv.triangulatePoints(P_key, P, points_key.T.astype(float), points_curr.T.astype(float))
@@ -169,9 +173,9 @@ class UWVO:
                     points_key_reproj = points_key_reproj.reshape((points_key_reproj.shape[0], 2))
                     print("Reprojection error of triangulated 3D points onto last keyframe: ", np.linalg.norm(points_key-points_key_reproj))
 
-                    # Plot 3D points at every keyframe creation
+                    #Plot 3D points at every keyframe creation
                     # ax.scatter(points_3d.T[0], points_3d.T[1], points_3d.T[2])
-                    # plt.pause(10)
+                    # plt.pause(0.10)
 
                     # Solve for R, t between keyframe and curr frame using PNP
                     # _,R_vec, t, inliers = cv.solvePnPRansac(points_3d, points_curr, self.K, np.zeros((4,)))
@@ -191,7 +195,8 @@ class UWVO:
 
         return curr_frame
 
-def plot_state(state_data):
+
+def plot_state(state_data, ground_truth=None):
 
     # Make sure we have state data
     if len(state_data) == 0:
@@ -205,13 +210,16 @@ def plot_state(state_data):
     state_data = np.array(state_data).T
     ax.scatter(state_data[0], state_data[1], state_data[2], 'b')
     ax.plot(state_data[0], state_data[1], state_data[2],'b')
+    if ground_truth is not None:
+        ax.plot(ground_truth [0], ground_truth [1], ground_truth [2],'r')
     ax.set_aspect('equal','box')
     plt.show()
 
-def main():
+
+def video_test():
 
     # Create visual odometry object
-    uwvo = UWVO(feature_quality=0.04, lk_winsize=100, im_scale=3.0/4, min_points=20)
+    uwvo = UWVO(feature_quality=0.01, lk_winsize=35, im_scale=3.0/4, min_points=250, cam_focal=2.97)
 
     # Run the visual odometry process on the input video 
     video_name = 'gate.mov'
@@ -221,7 +229,7 @@ def main():
     while(cap.isOpened()):
         ret, frame = cap.read()
         if ret == True:
-            cv.imshow('Features', uwvo.process(frame))
+            cv.imshow('Features', uwvo.process(frame, 1.0))
             if cv.waitKey(25) & 0xFF == ord('q'):
                 break
         else: 
@@ -232,7 +240,61 @@ def main():
     # Plot the state
     plot_state(uwvo.state_data)
 
+
+def kitti_dataset_test():
+
+    # Load pose data
+    file_name = os.path.expanduser('~')+'/Subbots/KITTI-Dataset/poses/00.txt'
+    lines = []
+    with open(file_name) as file:
+        lines = file.readlines()
+    poses = []
+    for line in lines:
+        poses.append(line.strip())
+
+    # Helper for recovering scale
+    def get_scale(frame_num):
+        x,y,z,x_prev,y_prev,z_prev = 0,0,0,0,0,0
+        if (frame_num-1 >= 0):
+            prev_frame_pose = poses[frame_num-1].split(" ")
+            # Parse pose
+            x_prev = float(prev_frame_pose[3])
+            y_prev = float(prev_frame_pose[7])
+            z_prev = float(prev_frame_pose[11])
+        frame_pose = poses[frame_num].split(" ")
+        # Parse pose
+        x = float(frame_pose[3])
+        y = float(frame_pose[7])
+        z = float(frame_pose[11])
+        return np.sqrt((x-x_prev)**2 + (y-y_prev)**2 + (z-z_prev)**2), [x,y,z]
+
+
+    # Create visual odometry object
+    uwvo = UWVO(feature_quality=0.008, lk_winsize=50, im_scale=1.0, min_points=250, cam_focal=718.8560)
+
+    # Read frames
+    folder = os.path.expanduser('~')+ '/Subbots/KITTI-Dataset/imgs/dataset/sequences/00/image_1/'
+    num_frames = 4540;
+    state_data = []
+    for i in range (num_frames + 1):
+        frame_name = folder + str(i).zfill(6) + '.png' 
+        frame = cv.imread(frame_name)   
+        scale, state = get_scale(i)
+        print(state)
+        state_data.append(state)
+        cv.imshow('Frame',uwvo.process(frame, scale))
+        if cv.waitKey(25) & 0xFF == ord('q'):
+            break
+    cv.destroyAllWindows()
+
+    state_data = np.array(state_data).T
+
+    # Plot the state
+    plot_state(uwvo.state_data, ground_truth=state_data)
+
+
 # Run main
 if __name__ == '__main__':
-    main()
+    # video_test()
+    kitti_dataset_test()
 
