@@ -5,15 +5,21 @@ from mpl_toolkits.mplot3d import Axes3D
 import os
 
 
-"""
-UnderWater Visual Odometry System
-"""
 class UWVO:
+    """
+    UnderWater Visual Odometry System
+    """
 
 
-    def __init__(self, feature_quality=0.04, lk_winsize=100, im_scale=1.0, min_points=15, cam_focal=1.0):
+    def __init__(self, feature_quality=0.04, tracking_winsize=21, im_scale=1.0, min_features=100, cam_focal=1.0):
         """
         Create a UWVO system using given parameters
+
+        @param feature_quality: The feature quality used on harris corner detection
+        @param tracking_winsize: The window size to search over when tracking features
+        @param im_scale: The resized scale of the image which the algorithm will be run on
+        @param min_features: The min number of features that the algorithm tracks
+        @param cam_focal: The focal length of the camera
         """
 
         # Frame to frame tracking
@@ -24,7 +30,7 @@ class UWVO:
         # Distance and feature thresholding
         self.parallax = 0.0
         self.parallax_thresh = 30
-        self.points_thresh = min_points
+        self.points_thresh = min_features
 
         # State 
         self.R_net = None
@@ -49,7 +55,7 @@ class UWVO:
                                     qualityLevel = feature_quality,
                                     minDistance = 7,
                                     blockSize = 7)
-        self.lk_params = dict( winSize  = (lk_winsize,lk_winsize),
+        self.lk_params = dict( winSize  = (tracking_winsize,tracking_winsize),
                                maxLevel = 3,
                                criteria = (cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 30, 0.001))
 
@@ -57,6 +63,10 @@ class UWVO:
     def preprocess(self, im):
         """
         Preprocesses the given image by applying CLAHE, resizing and converting to grayscale
+
+        @param im: The raw image
+        
+        @returns A preprocessed grayscale image
         """
 
         # Apply CLAHE then blur 
@@ -77,6 +87,10 @@ class UWVO:
     def detect_features(self,im):
         """
         Detect new features in an image (may be modified to add features instead of detecting new ones)
+
+        @param src: The grayscale image to detect features on
+
+        @returns The list of 2D points detected
         """
         # Detect feactures in image 
         points = cv.goodFeaturesToTrack(im, mask=None, **self.feature_params)
@@ -85,10 +99,12 @@ class UWVO:
 
     def process(self, curr_frame, scale):
         '''
-        Track features from previous frame to current frame, if a parallax exceding a threshold has been
-        reached, determine change in pose between previous keyframe and current frame and update the state 
-        accordingly. Then triangulate the tracked features in current frame and previous key to achieve 3D
-        observations of tracked features. 
+        Track features from previous frame to current frame, 
+
+        @param curr_frame: The frame that is being processed in the VO algorithm
+        @param scale: The magnitude of the translation vector between the previou frame and current frame
+
+        @returns The current frame with features tracked drawn on it
         '''
 
         # Preprocess curr frame
@@ -104,8 +120,8 @@ class UWVO:
             curr_points, status,_ = cv.calcOpticalFlowPyrLK(self.prev_frame, curr_frame, self.prev_points, None, **self.lk_params)
 
             if (np.count_nonzero(status) < self.points_thresh):
-                # Detect new features (or add them on to existing ones??)
-                print('Detecting New Features, Ran Out', np.count_nonzero(status))
+                # Detect new features if we fall below the points threshold (or add them on to existing ones??)
+                print('Detecting New Features, Ran Out: ', np.count_nonzero(status))
                 curr_points = self.detect_features(curr_frame)
                 self.keyframe_points = curr_points
             else: 
@@ -219,10 +235,10 @@ def plot_state(state_data, ground_truth=None):
 def video_test():
 
     # Create visual odometry object
-    uwvo = UWVO(feature_quality=0.01, lk_winsize=35, im_scale=3.0/4, min_points=250, cam_focal=2.97)
+    uwvo = UWVO(feature_quality=0.1, tracking_winsize=4, im_scale=3.0/4, min_features=10, cam_focal=2.97)
 
     # Run the visual odometry process on the input video 
-    video_name = 'gate.mov'
+    video_name = 'gate.mp4'
     cap = cv.VideoCapture('./videos/' + video_name)
     if (cap.isOpened()== False): 
         print("Error opening video stream or file")
@@ -270,31 +286,31 @@ def kitti_dataset_test():
 
 
     # Create visual odometry object
-    uwvo = UWVO(feature_quality=0.008, lk_winsize=50, im_scale=1.0, min_points=250, cam_focal=718.8560)
+    uwvo = UWVO(feature_quality=0.008, tracking_winsize=50, im_scale=1.0, min_features=250, cam_focal=718.8560)
 
     # Read frames
     folder = os.path.expanduser('~')+ '/Subbots/KITTI-Dataset/imgs/dataset/sequences/00/image_1/'
     num_frames = 4540;
-    state_data = []
+    ground_truth_data = []
     for i in range (num_frames + 1):
         frame_name = folder + str(i).zfill(6) + '.png' 
         frame = cv.imread(frame_name)   
         scale, state = get_scale(i)
         print(state)
-        state_data.append(state)
+        ground_truth_data.append(state)
         cv.imshow('Frame',uwvo.process(frame, scale))
         if cv.waitKey(25) & 0xFF == ord('q'):
             break
     cv.destroyAllWindows()
 
-    state_data = np.array(state_data).T
+    ground_truth_data = np.array(ground_truth_data).T
 
     # Plot the state
-    plot_state(uwvo.state_data, ground_truth=state_data)
+    plot_state(uwvo.state_data, ground_truth=ground_truth_data)
 
 
 # Run main
 if __name__ == '__main__':
-    # video_test()
-    kitti_dataset_test()
+    video_test()
+    # kitti_dataset_test()
 

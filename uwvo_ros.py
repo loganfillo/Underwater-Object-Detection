@@ -9,9 +9,10 @@ from cv_bridge import CvBridge, CvBridgeError
 import rospy
 
 
-"""
-UnderWater Visual Odometry System
-"""class UWVO
+class UWVO:
+    """
+    UnderWater Visual Odometry System
+    """
 
 
     def __init__(self, feature_quality=0.04, lk_winsize=100, im_scale=1.0, min_points=15):
