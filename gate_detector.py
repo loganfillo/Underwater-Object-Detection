@@ -2,7 +2,7 @@ import cv2 as cv
 import numpy as np
 import os
 import pickle
-
+import random
 
 class GateDetector:
     """
@@ -14,7 +14,7 @@ class GateDetector:
         self.num_clusters = num_clusters
         self.im_resize = im_resize
         self.debug = debug
-        self.gate_dims = (0,0,0,0)
+        self.gate_cntr = None
 
         with open(os.path.join(os.getcwd(), 'pickle/model.pkl'), 'rb') as file:
             self.model = pickle.load(file)
@@ -40,7 +40,6 @@ class GateDetector:
     def preprocess(self, src):
         """
         Preprocesses the source image to adjust for underwater artifacts
-
 
         @param src: A raw unscaled image
 
@@ -134,7 +133,7 @@ class GateDetector:
 
         @params src: A segmented grayscale image
 
-        @returns A set of convex hulls where each hull is a set of 2D points
+        @returns A set of convex hulls where each hull is an np array of 2D points
         """
         # Search over the binary images associated to each cluster
         hulls = []
@@ -157,16 +156,7 @@ class GateDetector:
 
             # Get the hulls whose area is within some range dependant on the src image
             for hull in hulls:
-
-                # Get x,y coordinates of hull points
-                con = hull.reshape(hull.shape[0],2).transpose()
-                x = con[0] 
-                y = con[1] 
-                con = np.array([x, y]).transpose().reshape((-1,1,2))
-                
-                # Approximation of hull area
-                hull_area = (np.max(x)-np.min(x))*(np.max(y)-np.min(y))
-
+                hull_area = cv.contourArea(hull)
                 im_size = src.shape[0]*src.shape[1]
                 upper_range = 1.0/7
                 lower_range = 1.0/5000
@@ -179,17 +169,16 @@ class GateDetector:
     def bound_gate_using_poles(self, hulls, src):
         """
         Finds the convex hulls associated to the poles and uses this to draw a bounding box around the poles 
-        of the gate
+        of the gate onto the raw image
 
         @param hulls: A set of the convex hulls to search
         @param src: The raw image 
 
         @returns The raw image with the bounding box around the gate location drawn on
         """
-
+        
         # Resize src to match the image the hulls were found on
         src = cv.resize(src, (int(src.shape[1]*self.im_resize), int(src.shape[0]*self.im_resize)), cv.INTER_CUBIC )
-
 
         # Feature helpers
         def ellispe_features(hull):
@@ -210,8 +199,7 @@ class GateDetector:
             return hull_area, rect_area, aspect_ratio
 
         def featureize(hulls):
-            X = []
-            
+            X = []  
             for hull in hulls:
                 features = []
 
@@ -219,16 +207,13 @@ class GateDetector:
                 hull_area, rect_area, aspect_ratio = contour_features(hull)
 
                 axis_ratio = float(MA)/ma
-                extent = float(hull_area)/rect_area
                 angle = np.abs(np.sin(angle *np.pi/180))
 
                 features.append(axis_ratio)
-                features.append(extent)
-                features.append(angle)
                 features.append(aspect_ratio)
+                features.append(angle)
 
-                X.append(features)
-            
+                X.append(features)       
             return np.asarray(X).astype(float)
 
         # Featureize hulls
@@ -240,7 +225,7 @@ class GateDetector:
         # Get pole hulls
         pole_hulls  = np.array(hulls)[y_hat == 1]
 
-        # Get 2D array of hull points assocaited to a pole
+        # Get 2D array of all the points of the pole hulls (to determine extrema)
         hull_points = np.empty((0, 2))
         for hull in pole_hulls:
             hull = hull.reshape(hull.shape[0], 2)
@@ -249,41 +234,49 @@ class GateDetector:
         # If we have detected a hull associated to a pole
         if len(hull_points > 0):
 
-            # Get most upper left and lower right points of pole hulls
-            # These are the points with smallest and greatest distance from top left (0,0) of image
-            min_point = hull_points[np.argmin(np.linalg.norm(hull_points, axis=1))]
-            max_point = hull_points[np.argmax(np.linalg.norm(hull_points, axis=1))]
+            # Get extrema points of hulls (i.e the points closest/furthest from the top left (0,0) and top right (width, 0) of the image)
+            up_left = hull_points[np.argmin(np.linalg.norm(hull_points, axis=1))]
+            bot_right = hull_points[np.argmax(np.linalg.norm(hull_points, axis=1))]
+            up_right = hull_points[np.argmin(np.linalg.norm(hull_points - np.array([src.shape[1], 0]), axis=1))]
+            bot_left = hull_points[np.argmax(np.linalg.norm(hull_points - np.array([src.shape[1], 0]), axis=1))]
 
-            # Draw min/max point for debug purposes
+            # Draw extrema points for debug purposes
             if self.debug:
-                src = cv.circle(src, (int(min_point[0]), int(min_point[1])), 7, (0,255,0), 3)
-                src = cv.circle(src, (int(max_point[0]), int(max_point[1])), 7, (0,255,255), 3)
+                src = cv.circle(src, (int(up_left[0]), int(up_left[1])), 7, (0,255,0), 3)
+                src = cv.circle(src, (int(bot_right[0]), int(bot_right[1])), 7, (0,255,0), 3)
+                src = cv.circle(src, (int(up_right[0]), int(up_right[1])), 7, (0,255,0), 3)
+                src = cv.circle(src, (int(bot_left[0]), int(bot_left[1])), 7, (0,255,0), 3)
 
-            x = int(min_point[0])
-            y = int(min_point[1])
+            # Define gate contour
+            gate_cntr = np.array([np.array([up_left], dtype=np.int32), 
+                                np.array([up_right], dtype=np.int32), 
+                                np.array([bot_right], dtype=np.int32), 
+                                np.array([bot_left], dtype=np.int32)])
 
-            w = int(max_point[0]-x) or 0
-            h = int(max_point[1]-y) or 1
+            # Get area of contour
+            area = cv.contourArea(gate_cntr)
+
+            # Get bounding box of contour to get it's approximate width/height
+            _,_,w,h = cv.boundingRect(gate_cntr)
 
             # If the bounding rectangle is more wide than high, most likely we have detected both poles
             if float(w)/h >= 1:
-                if self.gate_dims != (0,0,0,0):
-
-                    x_p,y_p,w_p,h_p = self.gate_dims
+                if (self.gate_cntr is not None):
+                    prev_cntr = self.gate_cntr
+                    _,_,w_p,h_p = cv.boundingRect(prev_cntr)
                     prev_area = w_p*h_p
-
-                    # We check to make sure the area hasn't changed too much between frames to account for outliers
-                    if not (w*h > 1.25*prev_area or w*h < 0.75*prev_area):
-                        self.gate_dims = (x,y,w,h)
+                    # We check to make sure the area hasn't changed too much between frames to account for outliers 
+                    if not (area > 1.20*prev_area or area < 0.80*prev_area):
+                        self.gate_cntr = gate_cntr
                 else:
-                    self.gate_dims = (x,y,w,h)
+                    # We make the ASSUMPTION that the first time we detect the gate, it is correct
+                    self.gate_cntr = gate_cntr
 
         # Draw the gate if we have detected it
-        if self.gate_dims != (0,0,0,0):
-            x,y,w,h = self.gate_dims
-            src = cv.rectangle(src,(x,y),(x+w,y+h),(0,0,255),2)
+        if (self.gate_cntr is not None):
+            src = cv.polylines(src, [self.gate_cntr], True, (0,0,255),2)
 
-        # Uncomment to draw all hulls and pole hulls on src for debug purposes
+        # Draw all non pole hulls and pole hulls on src for debug purposes
         if self.debug:
             src = cv.polylines(src, hulls,True, (255,255,255),2)
             src = cv.polylines(src, pole_hulls,True, (0,0,255),2)
@@ -373,16 +366,22 @@ class GateDetector:
         return labels
 
         
-def video(video_name, im_resize=1.0, record=False):
+def video_test(video_name, im_resize=1.0, record=False, debug=False):
     """
     Test PoleDetector on a video, records the output
+
+    @param im_resize: The resized image the detector is run on
+    @param record: True if you want to record and save the output of the detector
+    @param debug: True if you want debug information displayed on each frame
+
     """
-    detector = GateDetector(im_resize=im_resize)
+    detector = GateDetector(im_resize=im_resize, debug=debug)
     cap = cv.VideoCapture('./videos/' + video_name )
     frame_width = int(cap.get(3)*im_resize)
     frame_height = int(cap.get(4)*im_resize)
     if record:
-        out = cv.VideoWriter('videos/output.avi',cv.VideoWriter_fourcc(*'XVID') , 20.0, (frame_width,frame_height))
+        r = random.randint(0,1000)
+        out = cv.VideoWriter('videos/output' + str(r) + '.avi',cv.VideoWriter_fourcc(*'XVID') , 20.0, (frame_width,frame_height))
     if (cap.isOpened()== False): 
         print("Error opening video stream or file")
     while(cap.isOpened()):
@@ -402,13 +401,17 @@ def video(video_name, im_resize=1.0, record=False):
     cv.destroyAllWindows()
 
 
-def image(image_name, im_resize=1.0):
+def image_test(image_name, im_resize=1.0, debug=False):
     """
-    Test PoleDetector on an image, shows the images at various stages
+    Test PoleDetector on an image, shows the images at various stages of detection
+
+    @param im_resize: The resized image the detector is run on
+    @param debug: True if you want debug information displayed on the image
+
     """
     src = cv.imread('./images/' + image_name,1)
 
-    detector = GateDetector(im_resize=im_resize, debug=True)
+    detector = GateDetector(im_resize=im_resize, debug=debug)
 
     pre = detector.preprocess(src)
     seg = detector.segment(pre)
@@ -429,14 +432,21 @@ def label_poles():
     labels = detector.create_labelled_dataset()
 
     # Dump labels data to pickle
-    with open(os.path.join(os.getcwd(), 'pickle/pole_data2.pkl'), 'wb') as file:
+    r = random.randint(0,1000)
+    with open(os.path.join(os.getcwd(), 'pickle/pole_data' + str(r) + '.pkl'), 'wb') as file:
         pickle.dump(labels, file)
 
 
 if __name__ == '__main__':
-    im_resize = 1.0
-    video('gate.mp4',im_resize=im_resize, record=True)
-    # for i in range(16):
-    #     im_name = 'raw_Moment' + str(i) + '.jpg'
-    #     image(im_name, im_resize=im_resize)
+    im_resize = 1.0/2
+
+    # Run detector on video
+    # video_test('gate.mp4',im_resize=im_resize, record=True)
+
+    # Run detector on set of images
+    for i in range(16):
+        im_name = 'raw_Moment' + str(i) + '.jpg'
+        image_test(im_name, im_resize=im_resize, debug=True)
+
+    # Run data label program
     # label_poles()
