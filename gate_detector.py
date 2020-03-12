@@ -10,10 +10,10 @@ class GateDetector:
     """
 
 
-    def __init__(self, num_clusters=4, im_resize=1.0/4):
+    def __init__(self, num_clusters=4, im_resize=1.0/4, debug=False):
         self.num_clusters = num_clusters
         self.im_resize = im_resize
-
+        self.debug = debug
         self.gate_dims = (0,0,0,0)
 
         with open(os.path.join(os.getcwd(), 'pickle/model.pkl'), 'rb') as file:
@@ -206,7 +206,8 @@ class GateDetector:
             hull_area = cv.contourArea(hull)
             x,y,w,h = cv.boundingRect(hull)
             rect_area = w*h
-            return hull_area, rect_area
+            aspect_ratio =  float(w)/h
+            return hull_area, rect_area, aspect_ratio
 
         def featureize(hulls):
             X = []
@@ -215,15 +216,16 @@ class GateDetector:
                 features = []
 
                 MA, ma, angle = ellispe_features(hull)
-                hull_area, rect_area = contour_features(hull)
+                hull_area, rect_area, aspect_ratio = contour_features(hull)
 
                 axis_ratio = float(MA)/ma
                 extent = float(hull_area)/rect_area
-                angle = np.abs(np.cos(angle *np.pi/180))
+                angle = np.abs(np.sin(angle *np.pi/180))
 
                 features.append(axis_ratio)
                 features.append(extent)
                 features.append(angle)
+                features.append(aspect_ratio)
 
                 X.append(features)
             
@@ -239,7 +241,7 @@ class GateDetector:
         pole_hulls  = np.array(hulls)[y_hat == 1]
 
         # Get 2D array of hull points assocaited to a pole
-        hull_points = np.empty((0,2))
+        hull_points = np.empty((0, 2))
         for hull in pole_hulls:
             hull = hull.reshape(hull.shape[0], 2)
             hull_points = np.vstack((hull_points,hull))
@@ -248,14 +250,20 @@ class GateDetector:
         if len(hull_points > 0):
 
             # Get most upper left and lower right points of pole hulls
-            min_point = np.amin(hull_points, axis=0)
-            max_point = np.amax(hull_points, axis=0)
+            # These are the points with smallest and greatest distance from top left (0,0) of image
+            min_point = hull_points[np.argmin(np.linalg.norm(hull_points, axis=1))]
+            max_point = hull_points[np.argmax(np.linalg.norm(hull_points, axis=1))]
+
+            # Draw min/max point for debug purposes
+            if self.debug:
+                src = cv.circle(src, (int(min_point[0]), int(min_point[1])), 7, (0,255,0), 3)
+                src = cv.circle(src, (int(max_point[0]), int(max_point[1])), 7, (0,255,255), 3)
 
             x = int(min_point[0])
             y = int(min_point[1])
 
-            w = int(max_point[0]-x)
-            h = int(max_point[1]-y)
+            w = int(max_point[0]-x) or 0
+            h = int(max_point[1]-y) or 1
 
             # If the bounding rectangle is more wide than high, most likely we have detected both poles
             if float(w)/h >= 1:
@@ -275,8 +283,10 @@ class GateDetector:
             x,y,w,h = self.gate_dims
             src = cv.rectangle(src,(x,y),(x+w,y+h),(0,0,255),2)
 
-        # Uncomment to draw pole hulls on  src
-        #src = src = cv.polylines(src,pole_hulls,True, (0,0,255),2)
+        # Uncomment to draw all hulls and pole hulls on src for debug purposes
+        if self.debug:
+            src = cv.polylines(src, hulls,True, (255,255,255),2)
+            src = cv.polylines(src, pole_hulls,True, (0,0,255),2)
 
         return src
 
@@ -328,7 +338,7 @@ class GateDetector:
 
     def create_labelled_dataset(self):
         """
-        From the data folder, tries to open the images and for each image, allows the user to label the hulls as being 
+        From the images folder, tries to open the images and for each image, allows the user to label the hulls as being 
         associated to a pole or not, and returns a dictionary of hulls to labels
         
         @returns A dictionary mapping the hulls of each image to their labels
@@ -346,8 +356,8 @@ class GateDetector:
         labels = []
         directory = os.getcwd()
         
-        # Get absolute path of all imgs in the data folder
-        for dirpath,_,filenames in os.walk(os.path.join(directory, 'data')):
+        # Get absolute path of all images in the images folder
+        for dirpath,_,filenames in os.walk(os.path.join(directory, 'images')):
             for f in filenames:
                 imgs.append(os.path.abspath(os.path.join(dirpath, f)))
 
@@ -363,11 +373,10 @@ class GateDetector:
         return labels
 
         
-def video(video_name, record=False):
+def video(video_name, im_resize=1.0, record=False):
     """
     Test PoleDetector on a video, records the output
     """
-    im_resize = 1.0
     detector = GateDetector(im_resize=im_resize)
     cap = cv.VideoCapture('./videos/' + video_name )
     frame_width = int(cap.get(3)*im_resize)
@@ -393,19 +402,22 @@ def video(video_name, record=False):
     cv.destroyAllWindows()
 
 
-def image(image_name):
+def image(image_name, im_resize=1.0):
     """
-    Test PoleDetector on an image
+    Test PoleDetector on an image, shows the images at various stages
     """
-    src = cv.imread('./imgs/' + image_name,1)
-    detector = GateDetector(im_resize=3.0/4)
+    src = cv.imread('./images/' + image_name,1)
+
+    detector = GateDetector(im_resize=im_resize, debug=True)
+
     pre = detector.preprocess(src)
     seg = detector.segment(pre)
-    morph = detector.morphological(seg)
+    seg = detector.morphological(seg)
     hulls = detector.create_convex_hulls(seg)
+    gate = detector.bound_gate_using_poles(hulls, src)
     cv.imshow('Processed', pre)
-    cv.imshow('Segmented', morph)
-    cv.imshow('Poles', detector.bound_gate_using_poles(hulls,src))
+    cv.imshow('Segmented', seg)
+    cv.imshow('Gate', gate)
     cv.waitKey(0)
 
 
@@ -417,11 +429,14 @@ def label_poles():
     labels = detector.create_labelled_dataset()
 
     # Dump labels data to pickle
-    with open(os.path.join(os.getcwd(), 'pickle/pole_data.pkl'), 'wb') as file:
+    with open(os.path.join(os.getcwd(), 'pickle/pole_data2.pkl'), 'wb') as file:
         pickle.dump(labels, file)
 
 
 if __name__ == '__main__':
-    video('gate.mp4', record=True)
-    # image('im1.jpg')
+    im_resize = 1.0
+    video('gate.mp4',im_resize=im_resize, record=True)
+    # for i in range(16):
+    #     im_name = 'raw_Moment' + str(i) + '.jpg'
+    #     image(im_name, im_resize=im_resize)
     # label_poles()
