@@ -1,8 +1,20 @@
+#Created By: Logan Fillo
+#Created On: 2020-03-12
+
 import cv2 as cv
 import numpy as np
 import os
 import pickle
 import random
+import matplotlib.pyplot as plt
+
+from featureize import featureize_hulls
+
+
+"""
+Gate detector testing on images and videos
+"""
+
 
 class GateDetector:
     """
@@ -26,15 +38,14 @@ class GateDetector:
 
         @param src: Raw underwater image containing the gate
 
-        @returns An image containing the bounding box around a gate, if it can find it 
+        @returns: An image containing the bounding box around a gate, if it can find it 
         """
         pre = self.preprocess(src)
         seg = self.segment(pre)
         morph = self.morphological(seg)
         hulls = self.create_convex_hulls(morph)
-        gate = self.bound_gate_using_poles(hulls, src)
-
-        return gate
+        gate_im = self.bound_gate_using_poles(hulls, src)
+        return gate_im
 
 
     def preprocess(self, src):
@@ -43,7 +54,7 @@ class GateDetector:
 
         @param src: A raw unscaled image
 
-        @returns The preprocessed image
+        @returns: The preprocessed image
         """
         # Apply CLAHE and Gaussian on each RGB channel then downsize
         clahe = cv.createCLAHE(clipLimit=1.0, tileGridSize=(8,8))
@@ -63,7 +74,7 @@ class GateDetector:
 
         @param src: A grayscale image
 
-        @returns The sobel gradient of the image
+        @returns: The sobel gradient of the image
         """
         # Compute gradient using grayscale image
         scale = 1
@@ -83,7 +94,7 @@ class GateDetector:
 
         @param src: A preprocessed image
 
-        @returns A segmented grayscale image
+        @returns: A segmented grayscale image
         """
 
         # Compute gradient on saturation channel of image (seems to have best response to pole)
@@ -117,7 +128,7 @@ class GateDetector:
 
         @param src: A segmented grayscale image
 
-        @returns A morphologically smoothed image
+        @returns: A morphologically smoothed image
         """
         # Dilation then erosion to smooth segmentation
         kernel = np.ones((3,3), np.uint8)
@@ -133,7 +144,7 @@ class GateDetector:
 
         @params src: A segmented grayscale image
 
-        @returns A set of convex hulls where each hull is an np array of 2D points
+        @returns: A set of convex hulls where each hull is an np array of 2D points
         """
         # Search over the binary images associated to each cluster
         hulls = []
@@ -174,50 +185,14 @@ class GateDetector:
         @param hulls: A set of the convex hulls to search
         @param src: The raw image 
 
-        @returns The raw image with the bounding box around the gate location drawn on
+        @returns: The raw image with the bounding box around the gate location drawn on
         """
         
         # Resize src to match the image the hulls were found on
         src = cv.resize(src, (int(src.shape[1]*self.im_resize), int(src.shape[0]*self.im_resize)), cv.INTER_CUBIC )
 
-        # Feature helpers
-        def ellispe_features(hull):
-            angle = 0
-            MA = 1
-            ma = 1
-            try:
-                (x,y),(MA,ma),angle = cv.fitEllipse(hull)
-            except:
-                pass
-            return MA, ma, angle
-
-        def contour_features(hull):
-            hull_area = cv.contourArea(hull)
-            x,y,w,h = cv.boundingRect(hull)
-            rect_area = w*h
-            aspect_ratio =  float(w)/h
-            return hull_area, rect_area, aspect_ratio
-
-        def featureize(hulls):
-            X = []  
-            for hull in hulls:
-                features = []
-
-                MA, ma, angle = ellispe_features(hull)
-                hull_area, rect_area, aspect_ratio = contour_features(hull)
-
-                axis_ratio = float(MA)/ma
-                angle = np.abs(np.sin(angle *np.pi/180))
-
-                features.append(axis_ratio)
-                features.append(aspect_ratio)
-                features.append(angle)
-
-                X.append(features)       
-            return np.asarray(X).astype(float)
-
         # Featureize hulls
-        X_hat = featureize(hulls)
+        X_hat = featureize_hulls(hulls)
 
         # Predict 
         y_hat = self.model.predict(X_hat)
@@ -234,24 +209,7 @@ class GateDetector:
         # If we have detected a hull associated to a pole
         if len(hull_points > 0):
 
-            # Get extrema points of hulls (i.e the points closest/furthest from the top left (0,0) and top right (width, 0) of the image)
-            up_left = hull_points[np.argmin(np.linalg.norm(hull_points, axis=1))]
-            bot_right = hull_points[np.argmax(np.linalg.norm(hull_points, axis=1))]
-            up_right = hull_points[np.argmin(np.linalg.norm(hull_points - np.array([src.shape[1], 0]), axis=1))]
-            bot_left = hull_points[np.argmax(np.linalg.norm(hull_points - np.array([src.shape[1], 0]), axis=1))]
-
-            # Draw extrema points for debug purposes
-            if self.debug:
-                src = cv.circle(src, (int(up_left[0]), int(up_left[1])), 7, (0,255,0), 3)
-                src = cv.circle(src, (int(bot_right[0]), int(bot_right[1])), 7, (0,255,0), 3)
-                src = cv.circle(src, (int(up_right[0]), int(up_right[1])), 7, (0,255,0), 3)
-                src = cv.circle(src, (int(bot_left[0]), int(bot_left[1])), 7, (0,255,0), 3)
-
-            # Define gate contour
-            gate_cntr = np.array([np.array([up_left], dtype=np.int32), 
-                                np.array([up_right], dtype=np.int32), 
-                                np.array([bot_right], dtype=np.int32), 
-                                np.array([bot_left], dtype=np.int32)])
+            gate_cntr, src = self.create_gate_contour(hull_points, src)
 
             # Get area of contour
             area = cv.contourArea(gate_cntr)
@@ -284,6 +242,40 @@ class GateDetector:
         return src
 
 
+    def create_gate_contour(self, hull_points, src):
+        """
+        Creates the estimated gate contour from the given hull points, draws debug info on src if activated
+
+        @param hull_points: 2D array of points
+        @param src: The raw image 
+
+        @returns: The gate contour and the src image with debug info if activated 
+        """
+
+        width = src.shape[1]
+
+         # Get extrema points of hulls (i.e the points closest/furthest from the top left (0,0) and top right (width, 0) of the image)
+        up_left = hull_points[np.argmin(np.linalg.norm(hull_points, axis=1))]
+        bot_right = hull_points[np.argmax(np.linalg.norm(hull_points, axis=1))]
+        up_right = hull_points[np.argmin(np.linalg.norm(hull_points - np.array([width, 0]), axis=1))]
+        bot_left = hull_points[np.argmax(np.linalg.norm(hull_points - np.array([width, 0]), axis=1))]
+
+        # Draw extrema points for debug purposes
+        if self.debug:
+            src = cv.circle(src, (int(up_left[0]), int(up_left[1])), 8, (0,128,0), 4)
+            src = cv.circle(src, (int(bot_right[0]), int(bot_right[1])), 8, (0,128,0), 4)
+            src = cv.circle(src, (int(up_right[0]), int(up_right[1])), 8, (0,128,0), 4)
+            src = cv.circle(src, (int(bot_left[0]), int(bot_left[1])), 8, (0,128,0), 4)
+
+        # Define gate contour
+        gate_cntr = np.array([np.array([up_left], dtype=np.int32), 
+                            np.array([up_right], dtype=np.int32), 
+                            np.array([bot_right], dtype=np.int32), 
+                            np.array([bot_left], dtype=np.int32)])
+
+        return gate_cntr, src
+
+
     def display_and_label_hulls(self, hulls, src):
         """
         Displays each hull and allows someone to label the hull as being associated to a pole or not and returns a
@@ -292,7 +284,7 @@ class GateDetector:
         @param hulls: The convex hulls 
         @param src: The source image from which teh convex hulls have been created
 
-        @returns A list where each entry is a tuple mapping a hull to it's label
+        @returns: A list where each entry is a tuple mapping a hull to it's label
         """
         
         labels = []
@@ -334,7 +326,7 @@ class GateDetector:
         From the images folder, tries to open the images and for each image, allows the user to label the hulls as being 
         associated to a pole or not, and returns a dictionary of hulls to labels
         
-        @returns A dictionary mapping the hulls of each image to their labels
+        @returns: A dataset mapping the hulls of each image to their labels
         """
 
         print("-------------------------------------------------------------------")
@@ -438,15 +430,17 @@ def label_poles():
 
 
 if __name__ == '__main__':
-    im_resize = 1.0/2
 
-    # Run detector on video
-    # video_test('gate.mp4',im_resize=im_resize, record=True)
+    # A smaller resize will be faster but less accurate
+    im_resize = 3.0/4
 
     # Run detector on set of images
     for i in range(16):
         im_name = 'raw_Moment' + str(i) + '.jpg'
         image_test(im_name, im_resize=im_resize, debug=True)
+
+    # Run detector on video
+    # video_test('gate.mp4',im_resize=im_resize, record=True)
 
     # Run data label program
     # label_poles()

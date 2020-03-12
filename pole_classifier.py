@@ -1,69 +1,49 @@
+#Created By: Logan Fillo
+#Created On: 2020-03-12
+
 import pickle
 import os
 import numpy as np
 import cv2 as cv
 from sklearn import svm
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  
-import pickle
 
-def featureize(raw_data):
-    X = []
-    y = []
-    
-    for d in raw_data:
-        features = []
-        hull, label = d
-
-        MA, ma, angle = ellispe_features(hull)
-        hull_area, rect_area, aspect_ratio = contour_features(hull)
-
-        axis_ratio = float(MA)/ma
-        extent = float(hull_area)/rect_area
-        angle = np.abs(np.sin(angle *np.pi/180))
-
-        features.append(axis_ratio)
-        features.append(aspect_ratio)
-        # features.append(extent)
-        features.append(angle)
-
-        X.append(features)
-        y.append(label)
-    
-    return np.asarray(X).astype(float), np.asarray(y).astype(float)
+from featureize import featureize_model_data
 
 
-def ellispe_features(hull):
-    angle = 0
-    MA = 1
-    ma = 1
-    try:    
-        (x,y),(MA,ma),angle = cv.fitEllipse(hull)
-    except:
-        pass
-    return MA, ma, angle
-
-def contour_features(hull):
-    hull_area = cv.contourArea(hull)
-    x,y,w,h = cv.boundingRect(hull)
-    rect_area = w*h
-    aspect_ratio =  float(w)/h
-    return hull_area, rect_area, aspect_ratio
+"""
+Model training and plotting for pole convex hull classifier
+"""
 
 
 def plot(X,y, y_hat):
+    """
+    Assuming X is a (n,3) matrix, plots the examples of X in feature space where the points
+    are BLUE if the example is correctly labelled as not a pole, RED if the example is 
+    correctly labelled as a pole, and GREEN if the example isn't labelled correctly
+
+    @param X: The feature vector (should be (n,3))
+    @param y: The label vector (should be (n,))
+    @param y_hat: The predicted labels of X
+
+    """
     pole = X[(y == 1) & (y == y_hat)]
     not_pole = X[(y == 0) & (y == y_hat)]
     misclass = X[y != y_hat]
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(pole.T[0], pole.T[1], pole.T[2], c='r')
-    ax.scatter(not_pole.T[0], not_pole.T[1], not_pole.T[2] ,c='b')
-    ax.scatter(misclass.T[0], misclass.T[1], misclass.T[2], c='g')
-    fig.show()
+    ax.scatter(pole.T[0], pole.T[1], pole.T[2], c='r', label='Pole')
+    ax.scatter(not_pole.T[0], not_pole.T[1], not_pole.T[2] ,label='Not Pole', c='b')
+    ax.scatter(misclass.T[0], misclass.T[1], misclass.T[2], c='g', label='Misclassified')
+    ax.legend()
+
+    ax.set_xlabel("Axis Ratio")
+    ax.set_ylabel("Aspect Ratio")
+    ax.set_zlabel("Abs Sin of Angle")
+
     plt.show()
 
 
@@ -75,23 +55,25 @@ def main():
         data = pickle.load(file)
 
         # Featurize raw data
-        X, y = featureize(data)
+        X, y = featureize_model_data(data)
 
-        # Create test data set using an equal ratio of poles/not poles
+        # We create test data set using an equal ratio of poles/not poles
         poles = X[y == 1]
         num_poles = poles.shape[0]
-
         not_poles = X[y == 0]
         num_not_poles = not_poles.shape[0]
 
+        # Split data 4 ways
         poles_split = np.array_split(poles, 4)
         not_poles_split = np.array_split(not_poles, 4)
 
-        X_test = np.vstack((poles_split[0], not_poles_split[0]))
-        y_test = np.concatenate((np.ones((poles_split[0].shape[0],)), np.zeros((not_poles_split[0].shape[0], ))))
-
+        # Train on 3/4 of the data
         X = np.vstack((poles_split[1], poles_split[2], poles_split[3], not_poles_split[1],not_poles_split[2], not_poles_split[3]))
         y = np.concatenate((np.ones((num_poles -poles_split[0].shape[0],)), np.zeros((num_not_poles -not_poles_split[0].shape[0], ))))
+
+        # Test on 1/4 of the data
+        X_test = np.vstack((poles_split[0], not_poles_split[0]))
+        y_test = np.concatenate((np.ones((poles_split[0].shape[0],)), np.zeros((not_poles_split[0].shape[0], ))))
 
         # Train Model
         model = svm.SVC(kernel='linear')
@@ -111,9 +93,10 @@ def main():
         with open(os.path.join(os.getcwd(), 'pickle/model.pkl'), 'wb') as file:
             pickle.dump(model, file)
 
-        # Plot the model
+        # Plot the classified training data
         plot(X,y, y_hat)
 
+        # Plot the classified test data
         plot(X_test, y_test, y_hat_test )
 
 
